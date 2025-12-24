@@ -1,0 +1,484 @@
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const scoreDisplay = document.getElementById('score');
+const levelInfoDisplay = document.getElementById('level-info');
+const shieldBar = document.getElementById('shield-bar');
+const specialBar = document.getElementById('special-bar');
+const levelUpScreen = document.getElementById('level-up-screen');
+const upgradeOptionsDiv = document.getElementById('upgrade-options');
+const shieldButton = document.getElementById('shield-button');
+const specialButton = document.getElementById('special-button');
+const mainMenu = document.getElementById('main-menu');
+const startGameButton = document.getElementById('start-game-button');
+const uiOverlay = document.getElementById('ui-overlay');
+const controlsContainer = document.getElementById('controls-container');
+
+let gameActive=false, lastTime=0;
+
+// Configuração para Tela Cheia
+const SCREEN_W=window.innerWidth;
+const SCREEN_H=window.innerHeight;
+canvas.width=SCREEN_W; 
+canvas.height=SCREEN_H;
+
+// --- Dicionário de Texturas ---
+const textures = {};
+let assetsLoaded = 0;
+const totalAssets = 5; // Aumente conforme você adicionar mais texturas!
+
+// Função de Carregamento
+function loadTexture(name, src) {
+    const img = new Image();
+    img.onload = () => {
+        assetsLoaded++;
+        if (assetsLoaded === totalAssets) {
+            console.log("Todas as texturas carregadas!");
+            // Quando tudo estiver carregado, garantimos que o botão de início funcione
+            startGameButton.disabled = false;
+            startGameButton.textContent = "COMEÇAR JOGO";
+        }
+    };
+    img.onerror = () => {
+        console.error(`Falha ao carregar textura: ${src}`);
+        // Em caso de falha, use uma cor padrão
+        textures[name] = null;
+        assetsLoaded++;
+    };
+    img.src = src;
+    textures[name] = img;
+}
+
+// Carregando as Texturas
+// !!! ATENÇÃO: SUBSTITUA ESSES CAMINHOS PELOS CAMINHOS REAIS DOS SEUS ARQUIVOS !!!
+loadTexture('player', 'player.png');             
+loadTexture('enemy_blue', 'enemy_blue.png');     
+loadTexture('enemy_yellow', 'enemy_yellow.png'); 
+loadTexture('enemy_red', 'enemy_red.png');       
+loadTexture('projectile', 'projectile.png');     
+
+// Desabilita o botão até que as texturas carreguem
+startGameButton.disabled = true;
+startGameButton.textContent = "Carregando Texturas...";
+
+
+let player={};
+let projectiles=[], enemies=[], xpGems=[];
+let wave=1, enemiesPerWave=5;
+let touchStart={x:0,y:0}, touchCurrent={x:0,y:0}, isTouching=false;
+let enemySpawnTimer=0;
+const ENEMY_SPAWN_RATE=5; 
+
+// --- FUNÇÃO PARA INICIALIZAR O JOGO ---
+function initGame() {
+    // ... [O restante da função initGame() é mantido igual] ...
+    player = {
+        x:SCREEN_W/2, y:SCREEN_H/2, radius:15, speed:150,
+        dx:0, dy:0, score:0, health:100, level:1, xp:0, xpToNextLevel:5,
+        stats:{projectileDamage:5,projectileSpeed:400,projectileInterval:1.5,projectileSize:7,projectileDuration:2,moveSpeed:2,shotCount:1},
+        attackTimer:0, shield:0, shieldMax:100, special:0, specialMax:100, shieldActive:false, specialActive:false
+    };
+    
+    projectiles = [];
+    enemies = [];
+    xpGems = [];
+    wave = 1;
+    enemiesPerWave = 5;
+    enemySpawnTimer = 0;
+
+    mainMenu.style.display = 'none';
+    uiOverlay.style.display = 'flex';
+    controlsContainer.style.display = 'flex';
+    
+    gameActive = true;
+    lastTime = performance.now();
+    
+    nextWave();
+}
+
+// ... [O restante das funções do jogo: activateShield, activateSpecial, spawnEnemy, createProjectile, spawnXPGem, nextWave, checkLevelUp, showLevelUpScreen, update] ...
+// As funções acima permanecem as mesmas (elas só dependem da lógica, não do desenho).
+
+// Movimentação e Event Listeners
+canvas.addEventListener('mousedown', e=>{if(!gameActive)return; isTouching=true; const rect=canvas.getBoundingClientRect(); touchStart.x=(e.clientX-rect.left); touchStart.y=(e.clientY-rect.top); touchCurrent.x=touchStart.x; touchCurrent.y=touchStart.y;});
+canvas.addEventListener('mousemove', e=>{if(!isTouching)return; const rect=canvas.getBoundingClientRect(); touchCurrent.x=(e.clientX-rect.left); touchCurrent.y=(e.clientY-rect.top);});
+canvas.addEventListener('mouseup', e=>{isTouching=false; player.dx=0; player.dy=0;});
+canvas.addEventListener('touchstart', e=>{e.preventDefault(); if(!gameActive)return; isTouching=true; const rect=canvas.getBoundingClientRect(); touchStart.x=(e.touches[0].clientX-rect.left); touchStart.y=(e.touches[0].clientY-rect.top); touchCurrent.x=touchStart.x; touchCurrent.y=touchStart.y;});
+canvas.addEventListener('touchmove', e=>{e.preventDefault(); if(!isTouching)return; const rect=canvas.getBoundingClientRect(); touchCurrent.x=(e.touches[0].clientX-rect.left); touchCurrent.y=(e.touches[0].clientY-rect.top);});
+canvas.addEventListener('touchend', e=>{isTouching=false; player.dx=0; player.dy=0;});
+
+startGameButton.onclick = initGame;
+
+function activateShield() {
+    if(player.shield >= player.shieldMax && gameActive) {
+        player.shieldActive = true; 
+        player.shield = 0;
+    }
+}
+function activateSpecial() {
+    if(player.special >= player.specialMax && gameActive) {
+        player.specialActive = true; 
+        player.special = 0;
+    }
+}
+
+shieldButton.onclick = activateShield;
+specialButton.onclick = activateSpecial;
+
+window.addEventListener('keydown', e=>{
+    if(!gameActive) return;
+    if(e.key==='z' || e.key==='Z') activateShield();
+    if(e.key==='x' || e.key==='X') activateSpecial();
+});
+
+function spawnEnemy(type='blue',isBoss=false){
+    let x,y,size=isBoss?40:20;
+    let edge=Math.floor(Math.random()*4);
+    switch(edge){case 0:x=Math.random()*SCREEN_W;y=-size;break;case 1:x=SCREEN_W+size;y=Math.random()*SCREEN_H;break;case 2:x=Math.random()*SCREEN_W;y=SCREEN_H+size;break;case 3:x=-size;y=Math.random()*SCREEN_H;break;}
+    let color=type;
+    let speed=type==='yellow'?70:(isBoss?60:90);
+    let health=isBoss?100:3;
+    enemies.push({x,y,radius:size,health,speed,color,isBoss,type,attackTimer:0, maxHealth: health});
+}
+
+function createProjectile(){
+    let targets=enemies.filter(e=>e); 
+    if(targets.length==0) return;
+    
+    let nearestTarget = targets.reduce((nearest, current) => {
+        const distSqCurrent = (current.x - player.x)**2 + (current.y - player.y)**2;
+        if (!nearest || distSqCurrent < nearest.distSq) {
+            return {enemy: current, distSq: distSqCurrent};
+        }
+        return nearest;
+    }, null)?.enemy;
+
+    if (!nearestTarget) return;
+
+    for(let s=0;s<player.stats.shotCount;s++){
+        const angle=Math.atan2(nearestTarget.y-player.y,nearestTarget.x-player.x);
+        const spread=(s-((player.stats.shotCount-1)/2))*0.08;
+        const size=player.stats.projectileSize;
+        projectiles.push({x:player.x,y:player.y,dx:Math.cos(angle+spread)*player.stats.projectileSpeed,dy:Math.sin(angle+spread)*player.stats.projectileSpeed,radius:size,damage:player.stats.projectileDamage,lifetime:player.stats.projectileDuration, fromPlayer: true});
+    }
+}
+
+function spawnXPGem(x,y, value=1){xpGems.push({x,y,radius:6,value,active:true});}
+
+function nextWave(){
+    wave++;
+    enemiesPerWave=10 + Math.floor(player.level * 2); 
+    
+    for(let i=0;i<enemiesPerWave;i++){
+        let type='blue';
+        if(Math.random() < (0.1 + player.level * 0.01)) type='yellow'; 
+        spawnEnemy(type);
+    }
+    if(wave%5==0) spawnEnemy('red',true); 
+}
+
+function checkLevelUp(){
+    if(player.xp>=player.xpToNextLevel){
+        player.xp-=player.xpToNextLevel;
+        player.level++;
+        player.xpToNextLevel=Math.floor(player.xpToNextLevel*1.5);
+        gameActive=false; 
+        showLevelUpScreen();
+    }
+}
+
+function showLevelUpScreen(){
+    upgradeOptionsDiv.innerHTML='';
+    levelUpScreen.style.display='block';
+    uiOverlay.style.display = 'none';
+    controlsContainer.style.display = 'none';
+    
+    const upgrades=[
+        {name:'Damage +1 (Dano)',effect:()=>player.stats.projectileDamage+=1},
+        {name:'Speed +10% (Velocidade)',effect:()=>player.stats.moveSpeed+=0.1},
+        {name:'Fire Rate -10% (Cadência)',effect:()=>player.stats.projectileInterval=Math.max(0.3,player.stats.projectileInterval*0.9)},
+        {name:'Health +5 (Vida Max)',effect:()=>player.health+=5},
+        {name:'Shot Count +1 (Tiros)',effect:()=>player.stats.shotCount+=1},
+        {name:'Shield Max +20',effect:()=>player.shieldMax+=20},
+        {name:'Special Max +20',effect:()=>player.specialMax+=20}
+    ];
+    upgrades.sort(()=>0.5-Math.random());
+    const options=upgrades.slice(0,3);
+    options.forEach(u=>{
+        const button=document.createElement('button');
+        button.className='upgrade-button';
+        button.textContent=u.name;
+        button.onclick=()=>{
+            u.effect();
+            levelUpScreen.style.display='none';
+            uiOverlay.style.display = 'flex';
+            controlsContainer.style.display = 'flex';
+            gameActive=true;
+            lastTime = performance.now();
+        };
+        upgradeOptionsDiv.appendChild(button);
+    });
+}
+
+function update(deltaTime){
+    if(!gameActive)return;
+
+    let moveX=0,moveY=0;
+    if(isTouching){
+        let dirX=touchCurrent.x-touchStart.x;
+        let dirY=touchCurrent.y-touchStart.y;
+        const mag=Math.sqrt(dirX*dirX+dirY*dirY);
+        if(mag>10){moveX=dirX/mag; moveY=dirY/mag;}
+    }
+    player.x+=moveX*player.speed*player.stats.moveSpeed*deltaTime;
+    player.y+=moveY*player.speed*player.stats.moveSpeed*deltaTime;
+    player.x=Math.max(player.radius,Math.min(SCREEN_W-player.radius,player.x));
+    player.y=Math.max(player.radius,Math.min(SCREEN_H-player.radius,player.y));
+
+    enemySpawnTimer+=deltaTime;
+    if(enemies.length === 0 && enemySpawnTimer >= 1) { 
+        nextWave();
+        enemySpawnTimer=0;
+    } else if (enemies.length === 0 && enemySpawnTimer >= ENEMY_SPAWN_RATE) {
+        nextWave();
+        enemySpawnTimer=0;
+    }
+    
+    player.attackTimer+=deltaTime;
+    if(player.attackTimer>=player.stats.projectileInterval){
+        createProjectile(); 
+        player.attackTimer=0;
+    }
+
+    for(let i=projectiles.length-1;i>=0;i--){
+        let p=projectiles[i];
+        p.x+=p.dx*deltaTime; p.y+=p.dy*deltaTime; p.lifetime-=deltaTime;
+        
+        if(p.lifetime<=0){projectiles.splice(i,1); continue;}
+        
+        if (p.fromPlayer) {
+            for(let j=enemies.length-1;j>=0;j--){
+                let e=enemies[j];
+                const distSq=(p.x-e.x)**2+(p.y-e.y)**2;
+                if(distSq<(p.radius+e.radius)**2){
+                    e.health-=p.damage;
+                    projectiles.splice(i,1); i--;
+                    if(e.health<=0){
+                        if(e.isBoss) spawnXPGem(e.x,e.y, 5);
+                        else if(e.type==='yellow') spawnXPGem(e.x,e.y, 2); 
+                        else spawnXPGem(e.x,e.y, 1);
+                        player.score+=e.isBoss?100:10;
+                        enemies.splice(j,1);
+                    }
+                    break;
+                }
+            }
+        } 
+        else {
+            const distSq=(p.x-player.x)**2+(p.y-player.y)**2;
+            if(distSq<(p.radius+player.radius)**2){
+                if(!player.shieldActive){
+                    player.health-=p.damage;
+                    if(player.health<=0){gameActive=false; 
+                        uiOverlay.style.display = 'none';
+                        controlsContainer.style.display = 'none';
+                        alert(`Game Over! Score: ${player.score}`);
+                        mainMenu.style.display = 'block';
+                    }
+                }
+                projectiles.splice(i,1);
+                i--;
+            }
+        }
+    }
+
+    for(let i=enemies.length-1;i>=0;i--){
+        let e=enemies[i];
+        const angle=Math.atan2(player.y-e.y,player.x-e.x);
+        
+        if(e.type==='yellow'){
+            e.attackTimer+=deltaTime;
+            const distToPlayer = Math.sqrt((player.x-e.x)**2+(player.y-e.y)**2);
+            const attackRange = 250; 
+            
+            if(distToPlayer > attackRange * 1.1) {
+                e.x+=Math.cos(angle)*e.speed*deltaTime;
+                e.y+=Math.sin(angle)*e.speed*deltaTime;
+            } else if (distToPlayer < attackRange * 0.9) {
+                e.x-=Math.cos(angle)*e.speed*deltaTime * 0.5;
+                e.y-=Math.sin(angle)*e.speed*deltaTime * 0.5;
+            }
+            
+            if(e.attackTimer>2) {
+                let dx=Math.cos(angle)*200; let dy=Math.sin(angle)*200;
+                projectiles.push({x:e.x,y:e.y,dx,dy,radius:8,damage:1,lifetime:3, color: 'orange'}); 
+                e.attackTimer=0;
+            }
+
+        } else {
+            e.x+=Math.cos(angle)*e.speed*deltaTime;
+            e.y+=Math.sin(angle)*e.speed*deltaTime;
+        }
+
+        const distSq=(player.x-e.x)**2+(player.y-e.y)**2;
+        if(distSq<(player.radius+e.radius)**2){
+            if(!player.shieldActive){
+                player.health--; 
+                if(e.type !== 'yellow' || Math.random() < 0.2) enemies.splice(i,1); 
+                
+                if(player.health<=0){gameActive=false; 
+                    uiOverlay.style.display = 'none';
+                    controlsContainer.style.display = 'none';
+                    alert(`Game Over! Score: ${player.score}`);
+                    mainMenu.style.display = 'block';
+                }
+            }
+        }
+    }
+
+    for(let i=xpGems.length-1;i>=0;i--){
+        let g=xpGems[i];
+        let dist=Math.sqrt((player.x-g.x)**2+(player.y-g.y)**2);
+        if(dist<150){const angle=Math.atan2(player.y-g.y,player.x-g.x); g.x+=Math.cos(angle)*300*deltaTime; g.y+=Math.sin(angle)*300*deltaTime;}
+        if(dist<player.radius+g.radius){player.xp+=g.value; xpGems.splice(i,1); checkLevelUp();}
+    }
+    
+    if(!player.shieldActive) player.shield=Math.min(player.shieldMax,player.shield+20*deltaTime);
+    if(!player.specialActive) player.special=Math.min(player.specialMax,player.special+10*deltaTime);
+
+    if(player.specialActive){
+        enemies.forEach(e=>{
+            const dx=e.x-player.x, dy=e.y-player.y, dist=Math.sqrt(dx*dx+dy*dy);
+            if(dist<300){
+                e.x+=dx/dist*500*deltaTime; e.y+=dy/dist*500*deltaTime;
+            }
+        });
+        player.specialActive=false; 
+    }
+
+    if(player.shieldActive){
+        player.shieldActive=false; 
+    }
+    
+    shieldButton.disabled = player.shield < player.shieldMax;
+    specialButton.disabled = player.special < player.specialMax;
+    
+    shieldButton.textContent = `SHIELD (Z) [${Math.floor(player.shield)}/${player.shieldMax}]`;
+    specialButton.textContent = `SPECIAL (X) [${Math.floor(player.special)}/${player.specialMax}]`;
+
+    scoreDisplay.textContent=`SCORE: ${player.score} | HEALTH: ${player.health}`;
+    levelInfoDisplay.textContent=`LVL: ${player.level} | XP: ${player.xp}/${player.xpToNextLevel} | Wave: ${wave}`;
+    shieldBar.textContent=`SHIELD: ${Math.floor(player.shield)}%`;
+    specialBar.textContent=`SPECIAL: ${Math.floor(player.special)}%`;
+}
+
+
+// --- FUNÇÃO DRAW ATUALIZADA (Usando Texturas) ---
+function draw(){
+    ctx.clearRect(0,0,SCREEN_W,SCREEN_H);
+    if (!gameActive && mainMenu.style.display !== 'block' && levelUpScreen.style.display !== 'block') {
+        return; 
+    }
+
+    // 1. XP Gems - Mantidas como Círculos (você pode adicionar uma textura 'gem.png')
+    xpGems.forEach(g=>{ctx.fillStyle='lime'; ctx.beginPath(); ctx.arc(g.x,g.y,g.radius,0,Math.PI*2); ctx.fill();});
+    
+    // 2. Projectiles
+    projectiles.forEach(p=>{
+        const size = p.radius * 2;
+        const texture = p.fromPlayer ? textures['projectile'] : null; // Se for tiro inimigo, usa null (círculo)
+
+        if (texture) {
+            ctx.drawImage(texture, p.x - p.radius, p.y - p.radius, size, size);
+        } else {
+            // Desenha círculo se não houver textura (Tiro inimigo / Falha de carregamento)
+            ctx.fillStyle=p.color || (p.fromPlayer?'cyan':'orange'); 
+            ctx.beginPath(); 
+            ctx.arc(p.x,p.y,p.radius,0,Math.PI*2); 
+            ctx.fill();
+        }
+    });
+    
+    // 3. Enemies
+    enemies.forEach(e=>{
+        const size = e.radius * 2;
+        let texture = null;
+        if (e.isBoss) {
+            texture = textures['enemy_red'];
+        } else if (e.type === 'yellow') {
+            texture = textures['enemy_yellow'];
+        } else {
+            texture = textures['enemy_blue'];
+        }
+        
+        if (texture) {
+            ctx.drawImage(texture, e.x - e.radius, e.y - e.radius, size, size);
+        } else {
+            // Desenha círculo se não houver textura
+            ctx.fillStyle=e.color; 
+            ctx.beginPath(); 
+            ctx.arc(e.x,e.y,e.radius,0,Math.PI*2); 
+            ctx.fill();
+        }
+
+        // Barra de Vida do Boss
+        if(e.isBoss){
+            const barW=e.radius*2; const barH=5;
+            ctx.fillStyle='#333';
+            ctx.fillRect(e.x-barW/2,e.y-e.radius-barH-2,barW,barH);
+            ctx.fillStyle='red';
+            ctx.fillRect(e.x-barW/2,e.y-e.radius-barH-2,barW*(e.health/e.maxHealth),barH);
+        }
+    });
+
+    // 4. Player
+    if (gameActive || levelUpScreen.style.display === 'block') {
+        // Shield Efeito
+        if(player.shieldActive || player.shield >= player.shieldMax) {
+            ctx.fillStyle='rgba(0, 123, 255, 0.4)'; // Anel azul semi-transparente
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.radius + 5, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        const size = player.radius * 2;
+        const texture = textures['player'];
+
+        if (texture) {
+            ctx.drawImage(texture, player.x - player.radius, player.y - player.radius, size, size);
+        } else {
+            // Desenha círculo branco se não houver textura
+            ctx.fillStyle='white'; 
+            ctx.beginPath(); 
+            ctx.arc(player.x,player.y,player.radius,0,Math.PI*2); 
+            ctx.fill();
+        }
+    }
+    
+    // 5. Indicador de toque/movimento
+    if(isTouching && gameActive) {
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(touchStart.x, touchStart.y, 40, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(touchStart.x, touchStart.y);
+        ctx.lineTo(touchCurrent.x, touchCurrent.y);
+        ctx.stroke();
+    }
+}
+
+function gameLoop(currentTime){
+    const deltaTime=(currentTime-lastTime)/1000;
+    lastTime=currentTime;
+    update(deltaTime); 
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+requestAnimationFrame(gameLoop);
+</script>
